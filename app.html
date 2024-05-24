@@ -3,8 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Heartbeat Monitor PWA</title>
-  <link rel="manifest" href="manifest.json">
+  <title>Heartbeat</title>
+  <link rel="manifest" href="/Web/manifest.json">
+  <link rel="icon" href="/Web/favicon.ico" type="image/x-icon">
+  <link rel="icon" type="image/png" sizes="16x16" href="/Web/favicon-16x16.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/Web/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="/Web/icon-192x192.png">
+  <link rel="icon" type="image/png" sizes="512x512" href="/Web/icon-512x512.png">
   <style>
     /* Your CSS styles here */
     html, body {
@@ -52,10 +57,11 @@
   </div>
   <script>
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/service-worker.js')
+      navigator.serviceWorker.register('/Web/service-worker.js')
         .then(reg => console.log('Service Worker registered!', reg))
         .catch(err => console.log('Service Worker registration failed:', err));
     }
+
 
     document.addEventListener('DOMContentLoaded', () => {
    // Base Subject class for reactive streams
