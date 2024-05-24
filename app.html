@@ -42,7 +42,7 @@
       color: #0f0;
       font-family: 'Courier New', Courier, monospace;
       font-size: 2rem;
-      background-color: rgba(0, 0, 0, 0.8);
+      background-color: rgba(0, 0, 0, 0);
       padding: 10px;
       border-radius: 5px;
       z-index: 1000;
@@ -411,7 +411,7 @@
 
       const drawECG = (ctx, t, state, width, height) => {
         const ecgHeight = height * 0.1;
-        const ecgBaseY = height * 0.9;
+        const ecgBaseY = height * 0.8;
         const ecgWidth = width;
 
         const ecgValue = smoothEcgPhase(t);
