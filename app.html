@@ -161,8 +161,6 @@
         );
       }
     });
-
-    document.addEventListener('DOMContentLoaded', () => {
       // Initialize canvas elements and contexts
       const gridCanvas = document.getElementById('gridCanvas');
       const heartCanvas = document.getElementById('heartCanvas');
@@ -463,7 +461,7 @@
       // Initialize resize and animation
       resize$.next({ width: window.innerWidth, height: window.innerHeight });
       requestAnimationFrame(animate);
-    });
+
     });
   </script>
 </body>
