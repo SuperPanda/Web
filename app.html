@@ -11,7 +11,6 @@
   <link rel="icon" type="image/png" sizes="192x192" href="/web/icon-192x192.png">
   <link rel="icon" type="image/png" sizes="512x512" href="/web/icon-512x512.png">
   <style>
-    /* Your CSS styles here */
     html, body {
       margin: 0;
       height: 100%;
@@ -22,14 +21,18 @@
       background-color: #000;
     }
 
-    canvas {
-      border: 1px solid #fff;
-      opacity: 0.5;
+    .canvas-container {
+      position: relative;
       width: 100%;
       height: 100%;
       max-width: 100vw;
       max-height: 100vh;
-      object-fit: contain;
+    }
+
+    canvas {
+      position: absolute;
+      width: 100%;
+      height: 100%;
     }
 
     .monitor {
@@ -47,9 +50,11 @@
   </style>
 </head>
 <body>
-  <canvas id="gridCanvas"></canvas>
-  <canvas id="ecgCanvas"></canvas>
-  <canvas id="heartCanvas"></canvas>
+  <div class="canvas-container">
+    <canvas id="gridCanvas"></canvas>
+    <canvas id="heartCanvas"></canvas>
+    <canvas id="ecgCanvas"></canvas>
+  </div>
   <div class="monitor" id="monitor">
     BPM: <span id="bpm">0</span><br>
     SBP: <span id="sbp">0</span><br>
