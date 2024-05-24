@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Heartbeat Monitor</title>
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      width: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      background-color: #000;
+    }
+
+    .canvas-container {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      max-width: 100vw;
+      max-height: 100vh;
+    }
+
+    canvas {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+    }
+
+    .monitor {
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      color: #0f0;
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 2rem;
+      background-color: rgba(0, 0, 0, 0.8);
+      padding: 10px;
+      border-radius: 5px;
+      z-index: 1000;
+    }
+  </style>
+</head>
+<body>
+  <div class="canvas-container">
+    <canvas id="gridCanvas"></canvas>
+    <canvas id="heartCanvas"></canvas>
+    <canvas id="ecgCanvas"></canvas>
+  </div>
+  <div class="monitor" id="monitor">
+    BPM: <span id="bpm">0</span><br>
+    SBP: <span id="sbp">0</span><br>
+    DBP: <span id="dbp">0</span>
+  </div>
+  <script>
+    // Base Subject class for reactive streams
+    class Subject {
+      constructor() {
+        this.listeners = [];
+      }
+
+      // Method to emit a value to all listeners
+      next(value) {
+        this.listeners.forEach(listener => listener(value));
+      }
+
+      // Method to subscribe a listener to this subject
+      subscribe(listener) {
+        this.listeners.push(listener);
+      }
+    }
+
+    // BehaviorSubject that emits the current value to new subscribers
+    class BehaviorSubject extends Subject {
+      constructor(initialValue) {
+        super();
+        this.value = initialValue;
+      }
+
+      // Override next method to also store the latest value
+      next(value) {
+        this.value = value;
+        super.next(value);
+      }
+
+      // Override subscribe method to immediately emit the latest value to new subscribers
+      subscribe(listener) {
+        listener(this.value);
+        super.subscribe(listener);
+      }
+
+      // Method to get the current value
+      getValue() {
+        return this.value;
+      }
+    }
+
+    // ReplaySubject that emits the last n values to new subscribers
+    class ReplaySubject extends Subject {
+      constructor(bufferSize = 1) {
+        super();
+        this.bufferSize = bufferSize;
+        this.buffer = [];
+      }
+
+      // Override next method to store the latest values in a buffer
+      next(value) {
+        this.buffer.push(value);
+        if (this.buffer.length > this.bufferSize) {
+          this.buffer.shift();
+        }
+        super.next(value);
+      }
+
+      // Override subscribe method to emit all buffered values to new subscribers
+      subscribe(listener) {
+        this.buffer.forEach(value => listener(value));
+        super.subscribe(listener);
+      }
+    }
+
+    // Pipe function to combine multiple operators
+    const pipe = (...operators) => source => operators.reduce((acc, operator) => operator(acc), source);
+
+    // Map operator for transforming stream values
+    const map = transform => source => {
+      const subject = new Subject();
+      source.subscribe(value => subject.next(transform(value)));
+      return subject;
+    };
+
+    // FlatMap operator for flattening inner observables
+    const flatMap = transform => source => {
+      const subject = new Subject();
+      source.subscribe(value => {
+        const innerObservable = transform(value);
+        innerObservable.subscribe(innerValue => subject.next(innerValue));
+      });
+      return subject;
+    };
+
+    // Create a lens for focusing on specific parts of the state
+    const createLens = (getter, setter) => ({
+      get: getter,
+      set: setter,
+      compose: function (otherLens) {
+        return createLens(
+          (obj) => otherLens.get(this.get(obj)),
+          (value, obj) => this.set(otherLens.set(value, this.get(obj)), obj)
+        );
+      }
+    });
+
+    document.addEventListener('DOMContentLoaded', () => {
+      // Initialize canvas elements and contexts
+      const gridCanvas = document.getElementById('gridCanvas');
+      const heartCanvas = document.getElementById('heartCanvas');
+      const ecgCanvas = document.getElementById('ecgCanvas');
+      const gridCtx = gridCanvas.getContext('2d');
+      const heartCtx = heartCanvas.getContext('2d');
+      const ecgCtx = ecgCanvas.getContext('2d');
+      const bpmDisplay = document.getElementById('bpm');
+      const sbpDisplay = document.getElementById('sbp');
+      const dbpDisplay = document.getElementById('dbp');
+
+      // Initial configuration for the heartbeat monitor
+      const initialConfig = {
+        displayInterval: 5, // ECG display interval in seconds
+        maxMagnitudeCoefficient: 0.58,
+        minMagnitudeCoefficient: 0.45,
+        baseAnimationSpeed: 1, // Real-time speed
+        baseBeatFrequency: 1,
+        showECGPhases: true,
+        variability: 0.05,
+        timeScale: 1 // Time scaling factor to match real time
+      };
+
+      // Initial state for the heartbeat monitor
+      const initialState = {
+        bpm: 60,
+        sbp: 120,
+        dbp: 80,
+        ecgBuffer: Array.from({ length: initialConfig.displayInterval * 60 }, () => 0),
+        showECGPhases: initialConfig.showECGPhases,
+        animationTime: 0
+      };
+
+      // Create lenses for accessing specific parts of the state
+      const bpmLens = createLens(
+        state => state.bpm,
+        (value, state) => ({ ...state, bpm: value })
+      );
+
+      const sbpLens = createLens(
+        state => state.sbp,
+        (value, state) => ({ ...state, sbp: value })
+      );
+
+      const dbpLens = createLens(
+        state => state.dbp,
+        (value, state) => ({ ...state, dbp: value })
+      );
+
+      const ecgBufferLens = createLens(
+        state => state.ecgBuffer,
+        (value, state) => ({ ...state, ecgBuffer: value })
+      );
+
+      const showECGPhasesLens = createLens(
+        state => state.showECGPhases,
+        (value, state) => ({ ...state, showECGPhases: value })
+      );
+
+      const animationTimeLens = createLens(
+        state => state.animationTime,
+        (value, state) => ({ ...state, animationTime: value })
+      );
+
+      // Define the reducer function to handle state updates based on dispatched actions
+      const reducer = (state, action) => {
+        switch (action.type) {
+          case 'UPDATE_HEART_RATE':
+            state = bpmLens.set(action.payload.bpm, state);
+            state = sbpLens.set(action.payload.sbp, state);
+            state = dbpLens.set(action.payload.dbp, state);
+            return state;
+          case 'UPDATE_ECG_BUFFER':
+            state = ecgBufferLens.set(action.payload, state);
+            return state;
+          case 'TOGGLE_ECG_PHASES':
+            state = showECGPhasesLens.set(!showECGPhasesLens.get(state), state);
+            return state;
+          case 'UPDATE_ANIMATION_TIME':
+            state = animationTimeLens.set(action.payload, state);
+            return state;
+          default:
+            return state;
+        }
+      };
+
+      // Store class implementing a basic Redux-like state management system
+      class Store {
+        constructor(reducer, initialState) {
+          this.state = initialState;
+          this.reducer = reducer;
+          this.subject = new BehaviorSubject(initialState);
+        }
+
+        // Method to get the current state
+        getState() {
+          return this.subject.getValue();
+        }
+
+        // Method to dispatch actions to update the state
+        dispatch(action) {
+          this.state = this.reducer(this.state, action);
+          this.subject.next(this.state);
+        }
+
+        // Method to subscribe to state changes
+        subscribe(listener) {
+          this.subject.subscribe(listener);
+        }
+      }
+
+      // Instantiate the store with the initial state and reducer
+      const store = new Store(reducer, initialState);
+
+      // Resize event capture
+      const resize$ = new ReplaySubject(1);
+      window.addEventListener('resize', () => resize$.next({ width: window.innerWidth, height: window.innerHeight }));
+
+      // Animation frame capture
+      const animationFrame$ = new Subject();
+      const animate = (t) => {
+        animationFrame$.next(t);
+        requestAnimationFrame(animate);
+      };
+      requestAnimationFrame(animate);
+
+      // Handle resize events
+      resize$.subscribe(({ width, height }) => {
+        gridCanvas.width = width;
+        gridCanvas.height = height;
+        heartCanvas.width = width;
+        heartCanvas.height = height;
+        ecgCanvas.width = width;
+        ecgCanvas.height = height;
+      });
+
+      // Heart rate variability function to simulate real-world variability
+      const heartRateModel = () => {
+        const randomVariability = () => Math.random() * initialConfig.variability - initialConfig.variability / 2;
+        const { bpm, sbp, dbp } = store.getState();
+        const newBpm = Math.max(50, Math.min(100, bpm + randomVariability() * 100));
+        const newSbp = Math.max(100, Math.min(140, sbp + randomVariability() * 20));
+        const newDbp = Math.max(60, Math.min(100, dbp + randomVariability() * 10));
+        return { bpm: newBpm, sbp: newSbp, dbp: newDbp };
+      };
+
+      // Update heart rate, systolic and diastolic blood pressure at regular intervals
+      setInterval(() => {
+        const { bpm, sbp, dbp } = heartRateModel();
+        store.dispatch({ type: 'UPDATE_HEART_RATE', payload: { bpm, sbp, dbp } });
+      }, 1000);
+
+      // Define the Heaviside step function
+      const heaviside = x => (x >= 0 ? 1 : 0);
+
+      // ECG phase function to simulate the different phases of a heartbeat
+      const ecgPhaseHeaviside = t => {
+        const phase = t % 1.0;
+        const pWave = heaviside(phase) - heaviside(phase - 0.1);
+        const qWave = heaviside(phase - 0.1) - heaviside(phase - 0.2);
+        const rWave = heaviside(phase - 0.2) - heaviside(phase - 0.3);
+        const sWave = heaviside(phase - 0.3) - heaviside(phase - 0.4);
+        const tWave = heaviside(phase - 0.4) - heaviside(phase - 0.6);
+        return pWave + qWave + rWave + sWave + tWave;
+      };
+
+      // Smoothing kernel for convolution
+      const smoothingKernel = [0.2, 0.6, 0.2];
+
+      // Convolution function to apply smoothing
+      const convolve = (signal, kernel) => {
+        const halfKernel = Math.floor(kernel.length / 2);
+        return signal.map((value, index) => {
+          let result = 0;
+          for (let k = -halfKernel; k <= halfKernel; k++) {
+            const signalValue = signal[index + k] || 0;
+            const kernelValue = kernel[halfKernel + k] || 0;
+            result += signalValue * kernelValue;
+          }
+          return result;
+        });
+      };
+
+      // Smooth ECG phase function using convolution
+      const smoothEcgPhase = t => {
+        const phase = t % 1.0;
+        const phaseValues = [
+          0.1 * Math.sin(10 * Math.PI * phase) * (heaviside(phase) - heaviside(phase - 0.1)),
+          (-0.5 + 5 * phase) * (heaviside(phase - 0.1) - heaviside(phase - 0.2)),
+          (1.25 - 12.5 * phase) * (heaviside(phase - 0.2) - heaviside(phase - 0.3)),
+          (-0.75 + 7.5 * phase) * (heaviside(phase - 0.3) - heaviside(phase - 0.4)),
+          0.25 * Math.sin(5 * Math.PI * (phase - 0.4)) * (heaviside(phase - 0.4) - heaviside(phase - 0.6))
+        ];
+        return convolve(phaseValues, smoothingKernel).reduce((acc, val) => acc + val, 0);
+      };
+
+      // Draw functions for grid, heart, and ECG waveforms
+      const drawGrid = (ctx, width, height) => {
+        const gridSize = 20;
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = 1;
+        for (let x = 0; x < width; x += gridSize) {
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, height);
+          ctx.stroke();
+        }
+        for (let y = 0; y < height; y += gridSize) {
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(width, y);
+          ctx.stroke();
+        }
+      };
+
+      const drawHeart = (ctx, t, width, height, { maxScaleMagnitude, minScaleMagnitude }) => {
+        ctx.fillStyle = 'red';
+        const heart = t => ({
+          x: 16 * Math.pow(Math.sin(t), 3),
+          y: -(13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t)) // Inverted y to correct orientation
+        });
+
+        const scale = s => ({ x, y }) => ({ x: x * s, y: y * s });
+        const translateToCenter = (dx, dy) => ({ x, y }) => ({ x: x + dx, y: y + dy });
+
+        // Use the smooth ECG phase to scale the heart animation
+        const ecgValue = smoothEcgPhase(t);
+        const beatScale = scale(minScaleMagnitude + (maxScaleMagnitude - minScaleMagnitude) * (1 + 0.1 * ecgValue));
+
+        const points = Array.from({ length: 628 }, (_, i) => heart(i * 0.01))
+                            .map(scale(10))
+                            .map(beatScale)
+                            .map(translateToCenter(width / 2, height / 2));
+
+        ctx.beginPath();
+        points.forEach((p, i) => {
+          if (i === 0) ctx.moveTo(p.x, p.y);
+          else ctx.lineTo(p.x, p.y);
+        });
+        ctx.closePath();
+        ctx.fill();
+      };
+
+      const drawECG = (ctx, t, state, width, height) => {
+        const ecgHeight = height * 0.1;
+        const ecgBaseY = height * 0.9;
+        const ecgWidth = width;
+
+        const ecgValue = smoothEcgPhase(t);
+        const newBuffer = [...state.ecgBuffer, ecgValue].slice(-state.ecgBuffer.length);
+        store.dispatch({ type: 'UPDATE_ECG_BUFFER', payload: newBuffer });
+
+        ctx.clearRect(0, ecgBaseY - ecgHeight, ecgWidth, ecgHeight);
+        ctx.beginPath();
+        newBuffer.forEach((value, index) => {
+          const x = (index / newBuffer.length) * ecgWidth;
+          const y = ecgBaseY - value * ecgHeight;
+          if (index === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.strokeStyle = 'green';
+        ctx.stroke();
+      };
+
+      // Heart rate functor to convert heart rate data into animation parameters
+      const heartRateFunctor = (bpm, sbp, dbp) => {
+        const animationSpeed = initialConfig.baseAnimationSpeed / bpm;
+        const maxScaleMagnitude = (sbp / 120) * initialConfig.maxMagnitudeCoefficient;
+        const minScaleMagnitude = (dbp / 80) * initialConfig.minMagnitudeCoefficient;
+        return { animationSpeed, maxScaleMagnitude, minScaleMagnitude };
+      };
+
+      // Combine signals to create the animation loop
+      const animation$ = pipe(
+        map(t => ({
+          t: t / initialConfig.timeScale, // Normalize time
+          state: store.getState(),
+          dimensions: { width: window.innerWidth, height: window.innerHeight },
+          heartParams: heartRateFunctor(store.getState().bpm, store.getState().sbp, store.getState().dbp)
+        }))
+      )(animationFrame$);
+
+      // Subscribe to the combined signal
+      animation$.subscribe(({ t, state, dimensions, heartParams }) => {
+        gridCtx.clearRect(0, 0, dimensions.width, dimensions.height);
+        heartCtx.clearRect(0, 0, dimensions.width, dimensions.height);
+        ecgCtx.clearRect(0, 0, dimensions.width, dimensions.height);
+
+        drawGrid(gridCtx, dimensions.width, dimensions.height);
+        drawHeart(heartCtx, t, dimensions.width, dimensions.height, heartParams);
+        drawECG(ecgCtx, t, state, dimensions.width, dimensions.height);
+
+        bpmDisplay.textContent = state.bpm.toFixed(0);
+        sbpDisplay.textContent = state.sbp.toFixed(0);
+        dbpDisplay.textContent = state.dbp.toFixed(0);
+      });
+
+      // Initialize resize and animation
+      resize$.next({ width: window.innerWidth, height: window.innerHeight });
+      requestAnimationFrame(animate);
+    });
+  </script>
+</body>
+</html>
