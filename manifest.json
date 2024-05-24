@@ -1,7 +1,7 @@
 {
-  "name": "Heartbeat Monitor",
-  "short_name": "Monitor",
-  "start_url": "/app.html",
+  "name": "Heartbeat",
+  "short_name": "Heartbeat",
+  "start_url": "/Web/app.html",
   "display": "standalone",
   "background_color": "#000000",
   "theme_color": "#000000",
